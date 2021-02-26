@@ -126,12 +126,12 @@ def train_dpr(num_epochs=1, see_loss_step=50, save_model_step=500, grad_accum=32
               # save model
             if idx % save_model_step == 0:
                 print("saving model at epoch: " + str(i))
-                question_model_curr_save = 'saved_question_models/model_' + str(i)
-                context_model_curr_save = 'saved_context_models/model_' + str(i)
+                question_model_curr_save = 'saved_question_models/model_' + str(idx)
+                context_model_curr_save = 'saved_context_models/model_' + str(idx)
                 question_model.save_pretrained(question_model_curr_save)
                 context_model.save_pretrained(context_model_curr_save)
 
         print("Loss after epoch " + str(i) + ": ", total_loss.detach())
 
 # CALL FUNCTION
-train_dpr()
+train_dpr(grad_accum=1)
