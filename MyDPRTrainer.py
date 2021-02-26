@@ -74,17 +74,18 @@ def traversal_for_question_context(query, highest_doc, lowest_doc, other_gold_do
         gold_doc_embeddings = context_model(gold_doc_input_ids, attention_mask=gold_doc_attn_mask).pooler_output
         other_gold_doc_embeddings.append(gold_doc_embeddings)
     other_gold_doc_embeddings = torch.stack(other_gold_doc_embeddings).cuda()
+    other_gold_doc_embeddings = other_gold_doc_embeddings.squeeze(1)
 
     # make matrix of query embedding
     query_embeddings_arr = []
     for i in range(16):
         query_embeddings_arr.append(query_embeddings)
     query_embeddings_matrix = torch.stack(query_embeddings_arr).cuda()
+    query_embeddings_matrix = query_embeddings_matrix.squeeze(1)
 
     # take dot product
     matrix_mult = torch.matmul(query_embeddings_matrix, other_gold_doc_embeddings.T)
     dot_product = torch.diagonal(matrix_mult, 0)
-
     # take softmax
     softmax = F.softmax(dot_product)
 
