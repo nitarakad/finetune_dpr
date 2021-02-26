@@ -111,26 +111,24 @@ def train_dpr(num_epochs=1, see_loss_step=50, save_model_step=500, grad_accum=32
         optimizer = AdamW(optimizer_grouped_parameters, lr=5e-6)
         # loop through all values in the dataset
         for idx in tqdm(range(len(train_dataset)), total=len(train_dataset), desc="running through training data"):
-            #print(len(train_dataset[idx]))
-            for curr in train_dataset[idx]:
-                query, high_d, low_d, other_d = curr[0], curr[1], curr[2], curr[3]
-                loss = traversal_for_question_context(query, high_d, low_d, other_d)
-                total_loss += loss
-                loss.backward()
-                if idx % grad_accum == 0:
-                    optimizer.step()
-                    # zero the gradient
-                    question_model.zero_grad()
-                    context_model.zero_grad()
-                if idx % see_loss_step == 0:
-                    print("Loss within curr epoch at " + str(idx) + ":", loss.detach())
-                 # save model
-                if idx % save_model_step == 0:
-                    print("saving model at epoch: " + str(i))
-                    question_model_curr_save = 'saved_question_models/model_' + str(i)
-                    context_model_curr_save = 'saved_context_models/model_' + str(i)
-                    question_model.save_pretrained(question_model_curr_save)
-                    context_model.save_pretrained(context_model_curr_save)
+            query, high_d, low_d, other_d = train_dataset[idx][0], train_dataset[idx][1], train_dataset[idx][2], train_dataset[idx][3]
+            loss = traversal_for_question_context(query, high_d, low_d, other_d)
+            total_loss += loss
+            loss.backward()
+            if idx % grad_accum == 0:
+                optimizer.step()
+                # zero the gradient
+                question_model.zero_grad()
+                context_model.zero_grad()
+            if idx % see_loss_step == 0:
+                print("Loss within curr epoch at " + str(idx) + ":", loss.detach())
+              # save model
+            if idx % save_model_step == 0:
+                print("saving model at epoch: " + str(i))
+                question_model_curr_save = 'saved_question_models/model_' + str(i)
+                context_model_curr_save = 'saved_context_models/model_' + str(i)
+                question_model.save_pretrained(question_model_curr_save)
+                context_model.save_pretrained(context_model_curr_save)
 
         print("Loss after epoch " + str(i) + ": ", total_loss.detach())
 
