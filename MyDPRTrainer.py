@@ -65,11 +65,11 @@ def traversal_for_question_context(query, highest_doc, lowest_doc, other_gold_do
 
     # other gold doc embeddings
     other_gold_doc_embeddings = [highest_doc_embeddings, lowest_doc_embeddings]
-    # print("other_gold_docs: " , len(other_gold_docs))
-    for gold_doc in other_gold_docs:
-        gold_doc_input_ids = context_tokenizer(gold_doc, return_tensors='pt')["input_ids"].cuda()
+    for i in range(0, len(other_gold_docs), 3):
+        cur_docs = other_gold_docs[i:min(i+3, len(other_gold_docs))]
+        gold_doc_input_ids = context_tokenizer.batch_encode_plus(cur_docs, return_tensors='pt', truncation=True, padding=True)["input_ids"].cuda()
         gold_doc_embeddings = context_model(gold_doc_input_ids).pooler_output
-        other_gold_doc_embeddings.append(gold_doc_embeddings)
+        other_gold_doc_embeddings += list(torch.split(gold_doc_embeddings, gold_doc_embeddings.shape[0]))
     other_gold_doc_embeddings = torch.cat(other_gold_doc_embeddings)
 
     # make matrix of query embedding
