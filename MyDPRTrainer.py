@@ -12,9 +12,9 @@ from transformers import DPRContextEncoder, DPRContextEncoderTokenizer, DPRQuest
 context_name = 'facebook/dpr-ctx_encoder-multiset-base' # set to what context encoder we want to use
 question_name = 'facebook/dpr-question_encoder-multiset-base' # set to what question encoder we want to use
 context_tokenizer = DPRContextEncoderTokenizer.from_pretrained(context_name)
-context_model = DPRContextEncoder.from_pretrained(context_name).cuda()
+context_model = DPRContextEncoder.from_pretrained(context_name).to("cuda:0")
 question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained(question_name)
-question_model = DPRQuestionEncoder.from_pretrained(question_name).cuda()
+question_model = DPRQuestionEncoder.from_pretrained(question_name).to("cuda:0")
 
 nll = nn.NLLLoss()
 # question_model.half()
@@ -23,7 +23,8 @@ nll = nn.NLLLoss()
 
 # params
 batch_size = 256
-grad_accum = 8
+microbatchsize = 15
+grad_accum = 24
 lr = 1e-5
 text_descrip = "batchsize256_gradaccum8_v2"
 
@@ -54,23 +55,25 @@ def traversal_for_question_context(query, highest_doc, lowest_doc, other_gold_do
 
     # query embeddings
     question = query.split('///')[0]
-    query_input_ids = question_tokenizer(question, return_tensors='pt')["input_ids"].cuda()
-    query_embeddings = question_model(query_input_ids).pooler_output.cuda()
+    query_input_ids = question_tokenizer(question, return_tensors='pt').to("cuda:0")
+    query_embeddings = question_model(**query_input_ids).pooler_output.cuda()
 
     #highest doc/lowest doc embeddings
-    highest_doc_input_ids = context_tokenizer(highest_doc, return_tensors='pt')["input_ids"].cuda()
-    highest_doc_embeddings = context_model(highest_doc_input_ids).pooler_output.cuda()
-    lowest_doc_input_ids = context_tokenizer(lowest_doc, return_tensors='pt')["input_ids"].cuda()
-    lowest_doc_embeddings = context_model(lowest_doc_input_ids).pooler_output.cuda()
+    highest_doc_input_ids = context_tokenizer(highest_doc, return_tensors='pt').to("cuda:0")
+    highest_doc_embeddings = context_model(**highest_doc_input_ids).pooler_output.cuda()
+    lowest_doc_input_ids = context_tokenizer(lowest_doc, return_tensors='pt').to("cuda:0")
+    lowest_doc_embeddings = context_model(**lowest_doc_input_ids).pooler_output.cuda()
 
     # other gold doc embeddings
     other_gold_doc_embeddings = [highest_doc_embeddings, lowest_doc_embeddings]
-    for i in range(0, len(other_gold_docs), 3):
-        cur_docs = other_gold_docs[i:min(i+3, len(other_gold_docs))]
-        gold_doc_input_ids = context_tokenizer.batch_encode_plus(cur_docs, return_tensors='pt', truncation=True, padding=True)["input_ids"].cuda()
-        gold_doc_embeddings = context_model(gold_doc_input_ids).pooler_output
-        other_gold_doc_embeddings += list(torch.split(gold_doc_embeddings, gold_doc_embeddings.shape[0]))
-    other_gold_doc_embeddings = torch.cat(other_gold_doc_embeddings)
+    # print("other_gold_docs: " , len(other_gold_docs))
+    for i in range(0, len(other_gold_docs), microbatchsize):
+        cur_docs = other_gold_docs[i:min(i+microbatchsize, len(other_gold_docs))]
+        gold_doc_toks = context_tokenizer.batch_encode_plus(cur_docs, return_tensors='pt', truncation=True, padding=True).to("cuda:0")
+        gold_doc_embeddings = context_model(**gold_doc_toks).pooler_output
+        other_gold_doc_embeddings.extend(list(torch.split(gold_doc_embeddings, gold_doc_embeddings.shape[0])))
+    other_gold_doc_embeddings = torch.cat(other_gold_doc_embeddings, dim=0)
+    #other_gold_doc_embeddings = other_gold_doc_embeddings.view(-1, other_gold_doc_embeddings.shape[-1])
 
     # make matrix of query embedding
     query_embeddings_arr = []
@@ -105,9 +108,9 @@ def train_dpr(num_epochs=1, see_loss_step=50, save_model_step=500):
             {'params': [p for n, p in question_model.named_parameters()]},
             {'params': [p for n, p in context_model.named_parameters()]}
         ]
-        optimizer = AdamW(optimizer_grouped_parameters, lr=lr)
-        num_warmup_steps_scheduler = 50
+        optimizer = AdamW(optimizer_grouped_parameters, lr=5e-6)
         num_training_steps_scheduler = len(train_dataset)
+        num_warmup_steps_scheduler = 5
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps_scheduler, num_training_steps_scheduler)
         # loop through all values in the dataset
         prev_loss = None
@@ -119,12 +122,10 @@ def train_dpr(num_epochs=1, see_loss_step=50, save_model_step=500):
             loss = traversal_for_question_context(query, high_d, low_d, other_d)
             loss.backward()
             if idx < grad_accum:
-                total_loss += loss.detach()
+                total_loss += loss.detach().cpu().item()
             else:
-                total_loss += loss.detach()
-                total_loss -= prev_loss
-                avg_loss = total_loss/grad_accum
-            if idx % grad_accum == 0:
+                total_loss += loss.detach().cpu().item()
+            if (idx+1) % grad_accum == 0:
                 optimizer.step()
                 scheduler.step()
                 # zero the gradient
@@ -132,18 +133,20 @@ def train_dpr(num_epochs=1, see_loss_step=50, save_model_step=500):
                 context_model.zero_grad()
             prev_loss = loss.detach()
             if idx % see_loss_step == 0:
-                loss_to_print = avg_loss if avg_loss else total_loss
+                total_loss /= see_loss_step
+                loss_to_print = total_loss
                 #print(total_loss.item())
                 print("Loss within curr epoch at " + str(idx) + ":", loss_to_print)
                 # save model
+                total_loss = 0.0
             if idx % save_model_step == 0:
                 print("saving model at epoch: " + str(i))
                 question_model_curr_save = 'saved_question_models_'+text_descrip+'/model_' + str(i)
                 context_model_curr_save = 'saved_context_models_'+text_descrip+'/model_' + str(i)
                 question_model.save_pretrained(question_model_curr_save)
                 context_model.save_pretrained(context_model_curr_save)
-        loss_to_print = avg_loss if avg_loss else total_loss
-        print("Loss after epoch " + str(i) + ": ", loss_to_print.detach())
+        #loss_to_print = avg_loss if avg_loss else total_loss
+        #print("Loss after epoch " + str(i) + ": ", loss_to_print.detach())
 
 # CALL FUNCTION
 train_dpr()
